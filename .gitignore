@@ -1,3 +1,4 @@
 .vscode
 build/
 glTF-Sample-Models/
+*.log

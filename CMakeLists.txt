@@ -13,3 +13,8 @@ include(${SHARDS_ROOT}/cmake/Root.cmake)
 
 add_executable(gfx-sandbox sandbox.cpp)
 target_link_libraries(gfx-sandbox gfx gfx-texture-file gfx-gltf)
+
+add_executable(templates templates.cpp)
+target_include_directories(templates PUBLIC
+    ${SHARDS_ROOT}/src/core
+    ${SHARDS_ROOT}/include)
