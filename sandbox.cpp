@@ -11,6 +11,8 @@
 #include <gfx/features/base_color.hpp>
 #include <gfx/features/debug_color.hpp>
 #include <gfx/features/transform.hpp>
+#include <gfx/drawables/mesh_tree_drawable.hpp>
+#include <gfx/drawables/mesh_drawable.hpp>
 #include <gfx/fmt.hpp>
 #include <gfx/geom.hpp>
 #include <gfx/gltf/gltf.hpp>
@@ -28,6 +30,7 @@
 #include <gfx/window.hpp>
 #include <gfx/moving_average.hpp>
 #include <input/input.hpp>
+#include <input/detached.hpp>
 #include <magic_enum.hpp>
 #include <memory>
 #include <random>
@@ -36,8 +39,6 @@
 #include <log/log.hpp>
 
 using namespace gfx;
-using shards::input::ConsumeEventFilter;
-using shards::input::InputBuffer;
 
 #if GFX_EMSCRIPTEN
 #include <emscripten/html5.h>
@@ -70,8 +71,9 @@ struct App {
   gizmos::TranslationGizmo translationGizmo0;
   gizmos::TranslationGizmo translationGizmo1;
 
-  DrawableHierarchyPtr duck;
-  InputBuffer inputBuffer;
+  MeshTreeDrawable::Ptr duck;
+
+  shards::input::DetachedInput input;
 
   App() {}
 
@@ -94,8 +96,8 @@ struct App {
     };
 
     auto glbPath = fmt::format("assets/glTF/{0}.glb", "Duck");
-    duck = loadGltfFromFile(glbPath.c_str());
-    duck->transform = linalg::mul(linalg::scaling_matrix(float3(0.1)), duck->transform);
+    duck = loadGltfFromFile(glbPath.c_str()).root;
+    duck->trs = linalg::mul(linalg::scaling_matrix(float3(0.1)), duck->trs.getMatrix());
 
     pipelineSteps = {
         makePipelineStep(RenderDrawablesStep{
@@ -126,26 +128,23 @@ struct App {
     translationGizmo1.transform = linalg::mul(linalg::translation_matrix(float3(1, 0, 0)), translationGizmo1.transform);
   }
 
-  int2 mousePos{};
+  float2 mousePos{};
   uint32_t mouseButtonState{};
   void updateGizmoInput() {
-    for (auto &event : inputBuffer) {
-      if (event.type == SDL_MOUSEMOTION) {
-        mousePos.x = event.motion.x;
-        mousePos.y = event.motion.y;
-      } else if (event.type == SDL_MOUSEBUTTONDOWN || event.type == SDL_MOUSEBUTTONUP) {
-        mousePos.x = event.button.x;
-        mousePos.y = event.button.y;
-        if (event.button.state == SDL_PRESSED)
-          mouseButtonState |= SDL_BUTTON(event.button.button);
-        else
-          mouseButtonState &= ~SDL_BUTTON(event.button.button);
+    gizmoInputState.pressed = false;
+    for (auto &event : input.virtualInputEvents) {
+      if (auto pe = std::get_if<shards::input::PointerButtonEvent>(&event)) {
+        if (pe->index == SDL_BUTTON_LEFT && pe->pressed)
+          gizmoInputState.pressed = true;
       }
     }
+    mouseButtonState = input.state.mouseButtonState;
+    mousePos = input.state.cursorPosition;
 
-    gizmoInputState.pressed = (mouseButtonState & SDL_BUTTON(SDL_BUTTON_LEFT)) != 0;
+    gizmoInputState.held = (mouseButtonState & SDL_BUTTON(SDL_BUTTON_LEFT)) != 0;
     gizmoInputState.cursorPosition = float2(mousePos);
-    gizmoInputState.viewSize = float2(window.getSize());
+    gizmoInputState.viewportSize = float2(window.getSize());
+    gizmoInputState.inputSize = float2(window.getSize());
   }
 
   void renderFrame(float time, float deltaTime) {
@@ -181,14 +180,9 @@ struct App {
 
     while (!quit) {
       if (loop.beginFrame(1.0f / 120.0f, deltaTime)) {
-        inputBuffer.clear();
-        window.pollEventsForEach([&](auto evt) { inputBuffer.push_back(evt); });
-        for (auto &event : inputBuffer) {
-          if (event.type == SDL_WINDOWEVENT) {
-            if (event.window.type == SDL_WINDOWEVENT_SIZE_CHANGED) {
-            }
-          }
-          if (event.type == SDL_QUIT)
+        input.updateSDL([&](auto &&apply) { window.pollEventsForEach([&](auto evt) { apply(evt); }); });
+        for (auto &event : input.virtualInputEvents) {
+          if (std::get_if<shards::input::RequestCloseEvent>(&event))
             quit = true;
         }
 
